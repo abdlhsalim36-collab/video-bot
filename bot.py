@@ -6,8 +6,6 @@ TOKEN = os.getenv("BOT_TOKEN")
 logging.basicConfig(level=logging.INFO)
 user_data = {}
 
-# --- إعدادات نفس صورتك ---
-FONT_SIZE = 65  # نفس حجم الكتابة يلي بالصورة - اذا بدك اكبر حط 75
 FONT_PATH = "/tmp/aref.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/arefruqaa/ArefRuqaaInk-Bold.ttf"
 
@@ -19,29 +17,32 @@ def ensure_font():
             return "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     return FONT_PATH
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ابعت فيديو 🌙")
+async def start(update, context):
+    await update.message.reply_text("ابعت فيديو")
 
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_video(update, context):
     fid = update.message.video.file_id if update.message.video else update.message.document.file_id
     user_data[update.effective_user.id] = {"video": fid}
-    await update.message.reply_text("تمام! هلق الأغنية 🎵")
+    await update.message.reply_text("فيديو تمام ✅ هلق ابعت الأغنية")
 
-async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_audio(update, context):
     uid = update.effective_user.id
-    if uid not in user_data: 
+    if uid not in user_data:
         await update.message.reply_text("ابعت فيديو أول!")
         return
     fid = update.message.audio.file_id if update.message.audio else update.message.voice.file_id if update.message.voice else update.message.document.file_id
     user_data[uid]["audio"] = fid
-    await update.message.reply_text("هلق ابعت النص سطرين متل:\nجف العود اشتياقاً\nفمتى يزهر اللقاء؟")
+    await update.message.reply_text("أغنية تمام ✅ هلق ابعت النص")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(update, context):
     uid = update.effective_user.id
-    if uid not in user_data or "audio" not in user_data[uid]: return
+    if uid not in user_data or "audio" not in user_data[uid]:
+        return
     text = update.message.text
-    if text.startswith("/"): return
-    await update.message.reply_text("⏳ عم اشتغل بنفس زخرفة صورتك...")
+    if text.startswith("/"):
+        return
+    
+    await update.message.reply_text("⏳ عم اشتغل...")
     vp = ap = op = ""
     try:
         font = ensure_font()
@@ -54,23 +55,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await vf.download_to_drive(vp)
         await af.download_to_drive(ap)
 
-        # نحول السطر الثاني لسطر جديد
-        safe_text = text.replace("'", "").replace(":", "").strip().replace("\n", "\\n")
+        safe = text.replace("'", "").replace(":", "").strip().replace("\n", " ")
 
-        # نفس فلتر صورتك: ليلي غامق + فينيت + نص بالنص مزخرف
-        vfilt = f"eq=brightness=-0.08:contrast=1.1:saturation=0.9,vignette=PI/4,drawtext=text='{safe_text}':fontfile={font}:fontcolor=white:fontsize={FONT_SIZE}:shadowcolor=black@0.7:shadowx=2:shadowy=2:x=(w-text_w)/2:y=(h-text_h)/2-80:line_spacing=20"
+        # فلتر حلو + خط مزخرف + مكان تحت مثل صورتك
+        vfilt = f"eq=contrast=1.08:brightness=0.02:saturation=1.25,unsharp=5:5:0.8:3:3:0.4,drawtext=text='{safe}':fontfile={font}:fontcolor=white:fontsize=58:borderw=7:bordercolor=black@0.85:shadowcolor=black@0.6:shadowx=4:shadowy=4:x=(w-text_w)/2:y=h-th-95"
 
         cmd = ["ffmpeg","-y","-i",vp,"-i",ap,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-shortest","-vf",vfilt,op]
         subprocess.run(cmd, check=True)
-        await update.message.reply_video(video=open(op, 'rb'), caption="🌙 نفس زخرفتك جاهزة!")
-        for p in [vp,ap,op]:
-            if os.path.exists(p): os.remove(p)
+        await update.message.reply_video(video=open(op, 'rb'), caption="جاهز 🔥")
+        
+        for p in [vp, ap, op]:
+            if os.path.exists(p):
+                os.remove(p)
         del user_data[uid]
     except Exception as e:
         logging.error(e)
         await update.message.reply_text(f"خطأ: {e}")
-        for p in [vp,ap,op]:
-            if p and os.path.exists(p): os.remove(p)
+        for p in [vp, ap, op]:
+            if p and os.path.exists(p):
+                os.remove(p)
 
 def main():
     app = Application.builder().token(TOKEN).build()
