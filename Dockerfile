@@ -1,7 +1,7 @@
 FROM python:3.11-slim
-RUN apt-get update && apt-get install -y ffmpeg curl && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir pyTelegramBotAPI Pillow
+RUN apt-get update && apt-get install -y ffmpeg fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN curl -L -o ./arabic.ttf https://github.com/google/fonts/raw/main/ofl/amiri/Amiri-Bold.ttf
 CMD ["python", "bot.py"]
