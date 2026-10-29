@@ -1,102 +1,89 @@
-import telebot, os, subprocess, textwrap
-from PIL import Image, ImageDraw, ImageFont
+import os, asyncio, tempfile, threading, http.server, socketserver
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+import subprocess
 
-TOKEN = os.getenv("BOT_TOKEN", "9109693800:AAE...")
-bot = telebot.TeleBot(TOKEN, threaded=False)
-
-def get_font(sz=52):
-    # بيحاول يلاقي خط عربي مزخرف
-    for p in ["./arabic.ttf", "./Amiri-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, sz)
-            except:
-                pass
-    return ImageFont.load_default()
-
-def clean(t):
-    return t.replace("❤️","").strip()
-
-@bot.message_handler(commands=['start'])
-def s(m):
-    bot.reply_to(m, "🔥 البوت شغال 24/7 ! ابعت فيديو ثم غنية ثم النص")
-
-@bot.message_handler(content_types=['video', 'audio', 'voice', 'document'])
-def handle_all(m):
-    uid = m.from_user.id
+# حل مشكلة البورت ل Render
+def keep_alive():
     try:
-        # اذا غنية
-        if m.content_type in ['audio', 'voice'] or (m.document and 'audio' in m.document.mime_type):
-            fid = m.audio.file_id if m.content_type=='audio' else m.voice.file_id if m.content_type=='voice' else m.document.file_id
-            f = bot.get_file(fid)
-            data = bot.download_file(f.file_path)
-            tmp = f"tmp_{uid}"
-            open(tmp,'wb').write(data)
-            mp3 = f"bgm_{uid}.mp3"
-            subprocess.run(["ffmpeg","-y","-i",tmp,"-c:a","libmp3lame",mp3], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            os.remove(tmp)
-            bot.reply_to(m, "🎵 تمام حفظت الغنية! هلق ابعت النص")
-            return
+        port = int(os.environ.get("PORT", 10000))
+        socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler).serve_forever()
+    except: pass
+threading.Thread(target=keep_alive, daemon=True).start()
 
-        # اذا فيديو
-        fid = m.video.file_id
-        f = bot.get_file(fid)
-        data = bot.download_file(f.file_path)
-        raw = f"raw_{uid}.mp4"
-        open(raw,'wb').write(data)
-        out = f"in_{uid}.mp4"
-        # الحل هنا: -an بتحذف صوت الفيديو الأصلي نهائياً
-        subprocess.run(["ffmpeg","-y","-i",raw,"-vf","scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280","-an","-c:v","libx264","-preset","veryfast",out], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(raw):
-            os.remove(raw)
-        bot.reply_to(m, "✅ حفظت الفيديو بدون صوت! ابعت النص")
-    except Exception as e:
-        bot.reply_to(m, f"خطأ: {e}")
+TOKEN = os.environ.get("BOT_TOKEN")
+user_data = {}
 
-@bot.message_handler(content_types=['text'])
-def txt_handler(m):
-    if m.text.startswith('/'):
+def run_ffmpeg(cmd):
+    subprocess.run(cmd, check=True)
+
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file = await update.message.video.get_file() if update.message.video else await update.message.document.get_file()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tf:
+        await file.download_to_drive(tf.name)
+        user_data[update.effective_user.id] = {"video": tf.name, "audio": user_data.get(update.effective_user.id, {}).get("audio"), "text": user_data.get(update.effective_user.id, {}).get("text")}
+    await update.message.reply_text("✅ الفيديو انحفظ! هلق ابعت الأغنية، وبعدها النص")
+
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file = await update.message.audio.get_file() if update.message.audio else await update.message.voice.get_file() if update.message.voice else await update.message.document.get_file()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tf:
+        await file.download_to_drive(tf.name)
+        d = user_data.get(update.effective_user.id, {})
+        d["audio"] = tf.name
+        user_data[update.effective_user.id] = d
+    await update.message.reply_text("✅ الأغنية انحفظت! هلق ابعت النص")
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text.startswith("/"): return
+    uid = update.effective_user.id
+    d = user_data.get(uid, {})
+    if "video" not in d:
+        await update.message.reply_text("ابعت فيديو أول شي!")
         return
-    uid = m.from_user.id
-    in_path = f"in_{uid}.mp4"
-    if not os.path.exists(in_path):
-        bot.reply_to(m, "📹 ابعت فيديو أول شي")
+    d["text"] = text
+    user_data[uid] = d
+    
+    if "audio" not in d:
+        await update.message.reply_text("✅ النص انحفظ! هلق ابعت الأغنية")
         return
-    bot.reply_to(m, "🎬 عم ركب الفيديو... استنى شوي")
+
+    await update.message.reply_text("⏳ عم اشتغل على الفيديو... ثواني")
+
     try:
-        txt = clean(m.text)
-        W,H = 720,1280
-        font = get_font(58)
-        img = Image.new('RGBA',(W,H),(0,0,0,0))
-        d = ImageDraw.Draw(img)
-        lines = textwrap.wrap(txt,width=20)
-        total_h = 0
-        bboxes = []
-        for l in lines:
-            bb = d.textbbox((0,0),l,font=font,stroke_width=6)
-            bboxes.append(bb)
-            total_h += (bb[3]-bb[1]) + 20
-        y = (H - total_h)//2
-        for i, line in enumerate(lines):
-            bb = bboxes[i]
-            x = (W - (bb[2]-bb[0]))//2
-            d.text((x,y),line,font=font,fill='white',stroke_width=6,stroke_fill='black')
-            y += (bb[3]-bb[1]) + 20
-        txt_path = f"txt_{uid}.png"
-        img.save(txt_path)
-        out_path = f"out_{uid}.mp4"
-        bgm = f"bgm_{uid}.mp3"
-        has_music = os.path.exists(bgm) and os.path.getsize(bgm)>1000
-        if has_music:
-            cmd = ["ffmpeg","-y","-i",in_path,"-i",txt_path,"-i",bgm,"-filter_complex","[0:v][1:v]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]","-map","[v]","-map","2:a","-c:v","libx264","-c:a","aac","-shortest","-movflags","+faststart",out_path]
-        else:
-            cmd = ["ffmpeg","-y","-i",in_path,"-i",txt_path,"-filter_complex","[0:v][1:v]overlay=(W-w)/2:(H-h)/2,format=yuv420p","-c:v","libx264","-an","-movflags","+faststart",out_path]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        bot.send_video(m.chat.id, open(out_path,'rb'), caption="✨ جاهز! صوت الفيديو الأصلي انحذف")
-        for f in [txt_path, out_path]:
-            if os.path.exists(f):
-                os.remove(f)
-    except Exception as e:
-        bot.reply_to(m, f"خطأ: {e}")
+        video_path = d["video"]
+        audio_path = d["audio"]
+        txt = d["text"]
 
-bot.infinity_polling(none_stop=True)
+        # إزالة صوت الفيديو الأصلي + تجهيز الفيديو بدون صوت
+        no_audio_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        run_ffmpeg(["ffmpeg", "-y", "-i", video_path, "-an", "-c:v", "copy", no_audio_video])
+        
+        # إضافة النص بتصميم فخم
+        with_text = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        # خط أبيض فخم بحدود سوداء في النص السفلي
+        drawtext = f"drawtext=text='{txt}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:fontcolor=white:fontsize=48:borderw=4:bordercolor=black:x=(w-text_w)/2:y=h-th-100"
+        run_ffmpeg(["ffmpeg", "-y", "-i", no_audio_video, "-vf", drawtext, "-c:a", "copy", with_text])
+
+        # دمج الصوت الجديد فقط
+        final_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        run_ffmpeg(["ffmpeg", "-y", "-i", with_text, "-i", audio_path, "-c:v", "copy", "-map", "0:v:0", "-map", "1:a:0", "-shortest", final_path])
+
+        await update.message.reply_video(video=open(final_path, "rb"), caption="🔥 جاهز!")
+        
+        for p in [video_path, audio_path, no_audio_video, with_text, final_path]:
+            try: os.remove(p)
+            except: pass
+        user_data.pop(uid, None)
+
+    except Exception as e:
+        await update.message.reply_text(f"صار خطأ: {e}")
+        print(e)
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(MessageHandler(filters.VIDEO | (filters.Document.VIDEO), handle_video))
+app.add_handler(MessageHandler(filters.AUDIO | filters.VOICE | (filters.Document.AUDIO), handle_audio))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+print("Bot started!")
+app.run_polling()
