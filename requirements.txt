@@ -1,4 +1,1 @@
-pyTelegramBotAPI
-Pillow
-arabic-reshaper
-python-bidi
+python-telegram-bot==20.7
