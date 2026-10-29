@@ -1,4 +1,7 @@
-import os, logging, subprocess, uuid
+import os
+import logging
+import subprocess
+import uuid
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -16,19 +19,30 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid not in user_data: 
+    if uid not in user_data:
         await update.message.reply_text("ابعت فيديو أول!")
         return
-    fid = update.message.audio.file_id if update.message.audio else update.message.voice.file_id if update.message.voice else update.message.document.file_id
+    fid = None
+    if update.message.audio:
+        fid = update.message.audio.file_id
+    elif update.message.voice:
+        fid = update.message.voice.file_id
+    else:
+        fid = update.message.document.file_id
     user_data[uid]["audio"] = fid
     await update.message.reply_text("وصلت! هلق ابعت النص ✍️")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid not in user_data or "audio" not in user_data[uid]: return
+    if uid not in user_data or "audio" not in user_data[uid]:
+        return
     text = update.message.text
-    if text.startswith("/"): return
+    if text.startswith("/"):
+        return
     await update.message.reply_text("⏳ عم اشتغل...")
+    vp = ""
+    ap = ""
+    op = ""
     try:
         bot = context.bot
         vf = await bot.get_file(user_data[uid]["video"])
@@ -38,14 +52,37 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         op = f"/tmp/{uuid.uuid4()}.mp4"
         await vf.download_to_drive(vp)
         await af.download_to_drive(ap)
-        cmd = ["ffmpeg","-y","-i",vp,"-i",ap,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-shortest","-vf",f"drawtext=text='{text}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:fontcolor=white:bordercolor=black:borderw=3:x=(w-text_w)/2:y=h-th-60:fontsize=48",op]
+        safe_text = text.replace("'", "").replace(":", "")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", vp,
+            "-i", ap,
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-shortest",
+            "-vf", f"drawtext=text='{safe_text}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:fontcolor=white:bordercolor=black:borderw=3:x=(w-text_w)/2:y=h-th-60:fontsize=48",
+            op
+        ]
         subprocess.run(cmd, check=True)
-        await update.message.reply_video(video=open(op,'rb'), caption="تفضل! 🔥")
-        os.remove(vp); os.remove(ap); os.remove(op)
+        await update.message.reply_video(video=open(op, 'rb'), caption="تفضل! 🔥")
+        if os.path.exists(vp):
+            os.remove(vp)
+        if os.path.exists(ap):
+            os.remove(ap)
+        if os.path.exists(op):
+            os.remove(op)
         del user_data[uid]
     except Exception as e:
         logging.error(e)
         await update.message.reply_text(f"خطأ: {e}")
+        if vp and os.path.exists(vp):
+            os.remove(vp)
+        if ap and os.path.exists(ap):
+            os.remove(ap)
+        if op and os.path.exists(op):
+            os.remove(op)
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -56,4 +93,5 @@ def main():
     print("Bot Live!")
     app.run_polling()
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
